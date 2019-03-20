@@ -81,7 +81,7 @@ class FaceAging(object):
         )
 
         # generator: z + label --> generated image
-        self.G = self.generator(
+        self.G = self.generator_cbn(
             z=self.z,
             y=self.age,
             gender=self.gender,
@@ -534,6 +534,73 @@ class FaceAging(object):
             name=name
         )
 
+        # output
+        return tf.nn.tanh(current)
+
+    def generator_cbn(self, z, y, gender, reuse_variables=False, enable_tile_label=True, tile_ratio=1.0):
+        if reuse_variables:
+            tf.get_variable_scope().reuse_variables()
+        num_layers = int(np.log2(self.size_image)) - int(self.size_kernel / 2)
+        # if enable_tile_label:
+        #     duplicate = int(self.num_z_channels * tile_ratio / self.num_categories)
+        # else:
+        #     duplicate = 1
+        # z = concat_label(z, y, duplicate=duplicate)
+        # if enable_tile_label:
+        #     duplicate = int(self.num_z_channels * tile_ratio / 2)
+        # else:
+        #     duplicate = 1
+        # z = concat_label(z, gender, duplicate=duplicate)
+        size_mini_map = int(self.size_image / 2 ** num_layers)
+        l = concat_label(y, gender)
+        # fc layer
+        name = 'G_fc'
+        current = fc(
+            input_vector=z,
+            num_output_length=self.num_gen_channels * size_mini_map * size_mini_map,
+            name=name
+        )
+        # reshape to cube for deconv
+        current = tf.reshape(current, [-1, size_mini_map, size_mini_map, self.num_gen_channels])
+        current = tf.nn.relu(current)
+        # deconv layers with stride 2
+        for i in range(num_layers):
+            name = 'G_deconv' + str(i)
+            current = deconv2d(
+                    input_map=current,
+                    output_shape=[self.size_batch,
+                                  size_mini_map * 2 ** (i + 1),
+                                  size_mini_map * 2 ** (i + 1),
+                                  int(self.num_gen_channels / 2 ** (i + 1))],
+                    size_kernel=self.size_kernel,
+                    biased=False,
+                    name=name
+                )
+            current = condition_batch_norm(current, l, name='G_CBN'+str(i))
+            current = tf.nn.relu(current)
+        name = 'G_deconv' + str(i+1)
+        current = deconv2d(
+            input_map=current,
+            output_shape=[self.size_batch,
+                          self.size_image,
+                          self.size_image,
+                          int(self.num_gen_channels / 2 ** (i + 2))],
+            size_kernel=self.size_kernel,
+            stride=1,
+            name=name
+        )
+        current = tf.nn.relu(current)
+        name = 'G_deconv' + str(i + 2)
+        current = deconv2d(
+            input_map=current,
+            output_shape=[self.size_batch,
+                          self.size_image,
+                          self.size_image,
+                          self.num_input_channels],
+            size_kernel=self.size_kernel,
+            stride=1,
+            name=name
+        )
         # output
         return tf.nn.tanh(current)
 

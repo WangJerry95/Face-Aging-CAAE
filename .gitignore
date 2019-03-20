@@ -1,0 +1,5 @@
+.idea/
+*.pyc
+init_model/
+save/
+data/
