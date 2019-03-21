@@ -96,7 +96,7 @@ class FaceAging(object):
         )
 
         # discriminator on G
-        self.D_G, self.D_G_logits = self.discriminator_img(
+        self.D_G, self.D_G_logits = self.discriminator_img_projection(
             image=self.G,
             y=self.age,
             gender=self.gender,
@@ -111,7 +111,7 @@ class FaceAging(object):
         )
 
         # discriminator on input image
-        self.D_input, self.D_input_logits = self.discriminator_img(
+        self.D_input, self.D_input_logits = self.discriminator_img_projection(
             image=self.input_image,
             y=self.age,
             gender=self.gender,
@@ -270,14 +270,14 @@ class FaceAging(object):
             sample_images = np.array(sample).astype(np.float32)[:, :, :, None]
         else:
             sample_images = np.array(sample).astype(np.float32)
-        sample_label_age = np.ones(
+        sample_label_age = np.zeros(
             shape=(len(sample_files), self.num_categories),
             dtype=np.float32
-        ) * self.image_value_range[0]
-        sample_label_gender = np.ones(
+        )
+        sample_label_gender = np.zeros(
             shape=(len(sample_files), 2),
             dtype=np.float32
-        ) * self.image_value_range[0]
+        )
         for i, label in enumerate(sample_files):
             label = int(str(sample_files[i]).split('/')[-1].split('_')[0])
             if 0 <= label <= 5:
@@ -300,9 +300,9 @@ class FaceAging(object):
                 label = 8
             else:
                 label = 9
-            sample_label_age[i, label] = self.image_value_range[-1]
+            sample_label_age[i, label] = 1 # one-hot labels
             gender = int(str(sample_files[i]).split('/')[-1].split('_')[1])
-            sample_label_gender[i, gender] = self.image_value_range[-1]
+            sample_label_gender[i, gender] = 1
 
         # ******************************************* training *******************************************************
         # initialize the graph
@@ -344,14 +344,14 @@ class FaceAging(object):
                     batch_images = np.array(batch).astype(np.float32)[:, :, :, None]
                 else:
                     batch_images = np.array(batch).astype(np.float32)
-                batch_label_age = np.ones(
+                batch_label_age = np.zeros(
                     shape=(len(batch_files), self.num_categories),
                     dtype=np.float
-                ) * self.image_value_range[0]
-                batch_label_gender = np.ones(
+                )
+                batch_label_gender = np.zeros(
                     shape=(len(batch_files), 2),
                     dtype=np.float
-                ) * self.image_value_range[0]
+                )
                 for i, label in enumerate(batch_files):
                     label = int(str(batch_files[i]).split('/')[-1].split('_')[0])
                     if 0 <= label <= 5:
@@ -374,9 +374,9 @@ class FaceAging(object):
                         label = 8
                     else:
                         label = 9
-                    batch_label_age[i, label] = self.image_value_range[-1]
+                    batch_label_age[i, label] = 1
                     gender = int(str(batch_files[i]).split('/')[-1].split('_')[1])
-                    batch_label_gender[i, gender] = self.image_value_range[-1]
+                    batch_label_gender[i, gender] = 1
 
                 # prior distribution on the prior of z
                 batch_z_prior = np.random.uniform(
@@ -658,7 +658,6 @@ class FaceAging(object):
                     scope=name,
                     reuse=reuse_variables
                 )
-            current = tf.nn.relu(current)
             if i == 0:
                 current = concat_label(current, y)
                 current = concat_label(current, gender, int(self.num_categories / 2))
@@ -677,6 +676,52 @@ class FaceAging(object):
             name=name
         )
         # output
+        return tf.nn.sigmoid(current), current
+
+    def discriminator_img_projection(self, image, y, gender, is_training=True, reuse_variables=False, num_hidden_layer_channels=(16, 32, 64, 128), enable_bn=True):
+        if reuse_variables:
+            tf.get_variable_scope().reuse_variables()
+        num_layers = len(num_hidden_layer_channels)
+        current = image
+        # conv layers with stride 2
+        for i in range(num_layers):
+            name = 'D_img_conv' + str(i)
+            current = conv2d(
+                    input_map=current,
+                    num_output_channels=num_hidden_layer_channels[i],
+                    size_kernel=self.size_kernel,
+                    name=name
+                )
+            if enable_bn:
+                name = 'D_img_bn' + str(i)
+                current = tf.contrib.layers.batch_norm(
+                    current,
+                    scale=False,
+                    is_training=is_training,
+                    scope=name,
+                    reuse=reuse_variables
+                )
+            current = tf.nn.relu(current)
+        # fully connection layer
+        name = 'D_img_fc1'
+        current = fc(
+            input_vector=tf.reshape(current, [self.size_batch, -1]),
+            num_output_length=1024,
+            name=name
+        )
+        current = lrelu(current)
+        # TODO: Add projection layer here
+        l = concat_label(y,gender)
+        project = projection(current, l)
+
+        name = 'D_img_fc2'
+        current = fc(
+            input_vector=current,
+            num_output_length=1,
+            name=name
+        )
+        # output
+        current = current + project
         return tf.nn.sigmoid(current), current
 
     def save_checkpoint(self):
@@ -736,12 +781,12 @@ class FaceAging(object):
         size_sample = images.shape[0]
         labels = np.arange(size_sample)
         labels = np.repeat(labels, size_sample)
-        query_labels = np.ones(
+        query_labels = np.zeros(
             shape=(size_sample ** 2, size_sample),
             dtype=np.float32
-        ) * self.image_value_range[0]
+        )
         for i in range(query_labels.shape[0]):
-            query_labels[i, labels[i]] = self.image_value_range[-1]
+            query_labels[i, labels[i]] = 1
         query_images = np.tile(images, [self.num_categories, 1, 1, 1])
         query_gender = np.tile(gender, [self.num_categories, 1])
         z, G = self.session.run(
@@ -788,17 +833,17 @@ class FaceAging(object):
             images = np.array(sample).astype(np.float32)[:, :, :, None]
         else:
             images = np.array(sample).astype(np.float32)
-        gender_male = np.ones(
+        gender_male = np.zeros(
             shape=(num_samples, 2),
             dtype=np.float32
-        ) * self.image_value_range[0]
-        gender_female = np.ones(
+        )
+        gender_female = np.zeros(
             shape=(num_samples, 2),
             dtype=np.float32
-        ) * self.image_value_range[0]
+        )
         for i in range(gender_male.shape[0]):
-            gender_male[i, 0] = self.image_value_range[-1]
-            gender_female[i, 1] = self.image_value_range[-1]
+            gender_male[i, 0] = 1
+            gender_female[i, 1] = 1
 
         self.test(images, gender_male, 'test_as_male.png')
         self.test(images, gender_female, 'test_as_female.png')

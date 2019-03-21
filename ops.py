@@ -127,7 +127,7 @@ def batch_norm(x, is_training=True, name='batch_norm'):
                                          name=name)
 
 def condition_batch_norm(x, z, is_training=True, name='batch_norm'):
-    with tf.variable_scope(name) :
+    with tf.variable_scope(name):
         _, _, _, c = x.get_shape().as_list()
         decay = 0.9
         epsilon = 1e-05
@@ -152,9 +152,14 @@ def condition_batch_norm(x, z, is_training=True, name='batch_norm'):
         else:
             return tf.nn.batch_normalization(x, test_mean, test_var, beta, gamma, epsilon)
 
-
-
-
-
+def projection(digits, y, name='projection'):
+    with tf.variable_scope(name):
+        H = y.shape[-1]# y:(b, c)
+        W = digits.shape[-1]# digits: (b, d)
+        V = tf.get_variable("V", [H, W], initializer=tf.truncated_normal_initializer(stddev=0.02))# V: (c, d)
+        #V = spectral_normalization("embed", V)
+        project = tf.matmul(y, V)# (b,d)
+        project = tf.reduce_sum(tf.multiply(project, digits), axis=1)# (b,1)
+        return project
 
 

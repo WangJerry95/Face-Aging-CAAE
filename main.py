@@ -46,6 +46,7 @@ def main(_):
             print '\n\tTraining Mode'
             if not FLAGS.use_trained_model:
                 print '\n\tPre-train the network'
+                model.save_dir = 'pretrain'
                 model.train(
                     num_epochs=10,  # number of epochs
                     use_trained_model=FLAGS.use_trained_model,
@@ -53,6 +54,7 @@ def main(_):
                     weigts=(0, 0, 0)
                 )
                 print '\n\tPre-train is done! The training will start.'
+            model.save_dir = 'save'
             model.train(
                 num_epochs=FLAGS.epoch,  # number of epochs
                 use_trained_model=FLAGS.use_trained_model,
