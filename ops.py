@@ -159,7 +159,7 @@ def projection(digits, y, name='projection'):
         V = tf.get_variable("V", [H, W], initializer=tf.truncated_normal_initializer(stddev=0.02))# V: (c, d)
         #V = spectral_normalization("embed", V)
         project = tf.matmul(y, V)# (b,d)
-        project = tf.reduce_sum(tf.multiply(project, digits), axis=1)# (b,1)
+        project = tf.reduce_sum(tf.multiply(project, digits), axis=1, keep_dims=True)# (b,1)
         return project
 
 
