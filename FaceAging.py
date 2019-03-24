@@ -52,10 +52,15 @@ class FaceAging(object):
         self.dataset_name = dataset_name
 
         # ************************************* input to graph ********************************************************
-        self.input_image = tf.placeholder(
+        self.input_sketches = tf.placeholder(
             tf.float32,
             [self.size_batch, self.size_image, self.size_image, self.num_input_channels],
-            name='input_images'
+            name='input_sketches'
+        )
+        self.input_photos = tf.placeholder(
+            tf.float32,
+            [self.size_batch, self.size_image, self.size_image, self.num_input_channels],
+            name='input_photos'
         )
         self.age = tf.placeholder(
             tf.float32,
@@ -67,57 +72,107 @@ class FaceAging(object):
             [self.size_batch, 2],
             name='gender_labels'
         )
-        self.z_prior = tf.placeholder(
-            tf.float32,
-            [self.size_batch, self.num_z_channels],
-            name='z_prior'
-        )
+        # self.z_prior = tf.placeholder(
+        #     tf.float32,
+        #     [self.size_batch, self.num_z_channels],
+        #     name='z_prior'
+        # )
         # ************************************* build the graph *******************************************************
         print '\n\tBuilding graph ...'
 
         # encoder: input image --> z
-        self.z = self.encoder(
-            image=self.input_image
+        self.z_s, _ = self.encoder_s(
+            image=self.input_sketches,
+            name='Es'
+        )
+        self.z_p, current_i  = self.encoder_s(
+            image=self.input_photos,
+            name='Ep'
+        )
+        self.z_cs = self.encoder_c(
+            self.z_s,
+            current_i
+        )
+        self.z_cp = self.encoder_c(
+            self.z_p,
+            current_i,
+            reuse_variables=True
         )
 
         # generator: z + label --> generated image
-        self.G = self.generator_cbn(
-            z=self.z,
+        self.G_s = self.generator_cbn(
+            z=self.z_cs,
             y=self.age,
             gender=self.gender,
             enable_tile_label=self.enable_tile_label,
             tile_ratio=self.tile_ratio
         )
-
-        # discriminator on z
-        self.D_z, self.D_z_logits = self.discriminator_z(
-            z=self.z,
-            is_training=self.is_training
+        self.G_p = self.generator_cbn(
+            z=self.z_cp,
+            y=self.age,
+            gender=self.gender,
+            enable_tile_label=self.enable_tile_label,
+            tile_ratio=self.tile_ratio,
+            reuse_variables=True
         )
 
-        # discriminator on G
-        self.D_G, self.D_G_logits = self.discriminator_img_projection(
-            image=self.G,
+        # discriminator on z_cs and z_cp
+        self.D_zcs, self.D_zcs_logits = self.discriminator_z(
+            z=self.z_cs,
+            is_training=self.is_training
+        )
+        self.D_zcp, self.D_zcp_logits = self.discriminator_z(
+            z=self.z_cp,
+            is_training=self.is_training,
+            reuse_variables=True
+        )
+
+        # discriminator on Generated and input images
+        self.D_Gp, self.D_Gp_logits = self.discriminator_img_projection(
+            image=self.G_p,
             y=self.age,
             gender=self.gender,
             is_training=self.is_training
         )
-
-        # discriminator on z_prior
-        self.D_z_prior, self.D_z_prior_logits = self.discriminator_z(
-            z=self.z_prior,
+        self.D_Gs, self.D_Gs_logits = self.discriminator_img_projection(
+            image=self.G_s,
+            y=self.age,
+            gender=self.gender,
             is_training=self.is_training,
+            reuse_variables=True
+        )
+        self.D_input, self.D_input_logits = self.discriminator_img_projection(
+            image=self.input_photos,
+            y=self.age,
+            gender=self.gender,
+            is_training=self.is_training,
+            reuse_variables=True
+        )
+
+        # re-encoder on generated image
+        self.z_rs, current_i  = self.encoder_s(
+            image=self.G_s,
+            name='Ep',
+            reuse_variables=True
+        )
+        self.z_rcs = self.encoder_c(
+            image=self.z_rs,
+            current_i=current_i,
+            reuse_variables=True
+        )
+        self.z_rp, current_i  = self.encoder_s(
+            image=self.G_p,
+            name='Ep',
+            reuse_variables=True
+        )
+        self.z_rcp = self.encoder_c(
+            image=self.z_rp,
+            current_i=current_i,
             reuse_variables=True
         )
 
         # discriminator on input image
-        self.D_input, self.D_input_logits = self.discriminator_img_projection(
-            image=self.input_image,
-            y=self.age,
-            gender=self.gender,
-            is_training=self.is_training,
-            reuse_variables=True
-        )
+
 
         # ************************************* loss functions *******************************************************
         # loss function of encoder + generator
@@ -126,23 +181,23 @@ class FaceAging(object):
 
         # loss function of discriminator on z
         self.D_z_loss_prior = tf.reduce_mean(
-            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_z_prior_logits, labels=tf.ones_like(self.D_z_prior_logits))
+            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_z_prior_logits, labels=tf.ones_like(self.D_z_prior_logits))
         )
         self.D_z_loss_z = tf.reduce_mean(
-            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_z_logits, labels=tf.zeros_like(self.D_z_logits))
+            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_z_logits, labels=tf.zeros_like(self.D_z_logits))
         )
         self.E_z_loss = tf.reduce_mean(
-            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_z_logits, labels=tf.ones_like(self.D_z_logits))
+            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_z_logits, labels=tf.ones_like(self.D_z_logits))
         )
         # loss function of discriminator on image
         self.D_img_loss_input = tf.reduce_mean(
-            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_input_logits, labels=tf.ones_like(self.D_input_logits))
+            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_input_logits, labels=tf.ones_like(self.D_input_logits))
         )
         self.D_img_loss_G = tf.reduce_mean(
-            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_G_logits, labels=tf.zeros_like(self.D_G_logits))
+            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_G_logits, labels=tf.zeros_like(self.D_G_logits))
         )
         self.G_img_loss = tf.reduce_mean(
-            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_G_logits, labels=tf.ones_like(self.D_G_logits))
+            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_G_logits, labels=tf.ones_like(self.D_G_logits))
         )
 
         # total variation to smooth the generated image
@@ -472,6 +527,50 @@ class FaceAging(object):
         # output
         return tf.nn.tanh(current)
 
+    def encoder_s(self, image, reuse_variables=False, name='Es'):
+        if reuse_variables:
+            tf.get_variable_scope().reuse_variables()
+        num_layers = int(np.log2(self.size_image)) - int(self.size_kernel / 2)
+        current = image
+        # conv layers with stride 2
+        for i in range(num_layers-2):
+            scope = name + '_conv' + str(i)
+            current = conv2d(
+                    input_map=current,
+                    num_output_channels=self.num_encoder_channels * (2 ** i),
+                    size_kernel=self.size_kernel,
+                    name=scope
+                )
+            current = tf.nn.relu(current)
+
+        return current, i
+
+    def encoder_c(self, current_map, current_i, reuse_variables=False, name='Ec'):
+        if reuse_variables:
+            tf.get_variable_scope().reuse_variables()
+        num_layers = int(np.log2(self.size_image)) - int(self.size_kernel / 2)
+        current = current_map
+        for i in range(current_i+1, num_layers):
+            scope = name+'_conv' + str(i)
+            current = conv2d(
+                    input_map=current,
+                    num_output_channels=self.num_encoder_channels * (2 ** i),
+                    size_kernel=self.size_kernel,
+                    name=scope
+                )
+            current = tf.nn.relu(current)
+
+        # fully connection layer
+        scope = name + '_fc'
+        current = fc(
+            input_vector=tf.reshape(current, [self.size_batch, -1]),
+            num_output_length=self.num_z_channels,
+            name=scope
+        )
+
+        # output
+        return tf.nn.tanh(current)
+
     def generator(self, z, y, gender, reuse_variables=False, enable_tile_label=True, tile_ratio=1.0):
         if reuse_variables:
             tf.get_variable_scope().reuse_variables()
@@ -541,16 +640,7 @@ class FaceAging(object):
         if reuse_variables:
             tf.get_variable_scope().reuse_variables()
         num_layers = int(np.log2(self.size_image)) - int(self.size_kernel / 2)
-        # if enable_tile_label:
-        #     duplicate = int(self.num_z_channels * tile_ratio / self.num_categories)
-        # else:
-        #     duplicate = 1
-        # z = concat_label(z, y, duplicate=duplicate)
-        # if enable_tile_label:
-        #     duplicate = int(self.num_z_channels * tile_ratio / 2)
-        # else:
-        #     duplicate = 1
-        # z = concat_label(z, gender, duplicate=duplicate)
+
         size_mini_map = int(self.size_image / 2 ** num_layers)
         l = concat_label(y, gender)
         # fc layer

@@ -162,4 +162,17 @@ def projection(digits, y, name='projection'):
         project = tf.reduce_sum(tf.multiply(project, digits), axis=1, keep_dims=True)# (b,1)
         return project
 
+def KL_loss(digits, name='KL_loss'):
+    with tf.variable_scope(name):
+        # digits shape: (b, n)
+        # first compute the mean and var of sampled latent code
+        z_mean, z_var = tf.nn.moments(digits, axes=[0,], keep_dims=True) # z_mean, z_var shape:(1, n)
+        kl_loss = tf.reduce_mean(-0.5*(tf.log(z_var) - z_var - tf.square(z_mean) + 1), -1)
+        return kl_loss
 
+def Euclidean_loss(x, y, name="Euclidean loss"):
+    with tf.variable_scope(name):
+        # calculate the euclidean loss between two tensors
+        assert_op = tf.assert_equal(tf.shape(x), tf.shape(y))
+        with tf.control_dependencies(assert_op):
+            return 0.5*tf.reduce_mean(tf.square(x-y))
