@@ -175,37 +175,50 @@ class FaceAging(object):
 
 
         # ************************************* loss functions *******************************************************
-        # loss function of encoder + generator
-        #self.EG_loss = tf.nn.l2_loss(self.input_image - self.G) / self.size_batch  # L2 loss
-        self.EG_loss = tf.reduce_mean(tf.abs(self.input_image - self.G))  # L1 loss
+        # reconstruction loss for latent vector and photo image
+        self.Recon_latent_loss = (tf.nn.l2_loss(self.z_cp, self.z_rcp) + tf.nn.l2_loss(self.z_cs, self.z_rcs)) / self.size_batch  # L2 loss
+        self.Recon_image_loss = tf.reduce_mean(tf.abs(self.input_photos - self.G_p))  # L1 loss
 
-        # loss function of discriminator on z
-        self.D_z_loss_prior = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_z_prior_logits, labels=tf.ones_like(self.D_z_prior_logits))
+        # adversarial loss of discriminator on latent vector Dz
+        self.D_zs_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_zcs_logits, labels=tf.ones_like(self.D_zcs_logits))
         )
-        self.D_z_loss_z = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_z_logits, labels=tf.zeros_like(self.D_z_logits))
+        self.D_zp_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_zcp_logits, labels=tf.zeros_like(self.D_zcp_logits))
         )
-        self.E_z_loss = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_z_logits, labels=tf.ones_like(self.D_z_logits))
+        self.E_zs_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_zcs_logits, labels=tf.zeros_like(self.D_zcs_logits))
         )
-        # loss function of discriminator on image
+        self.E_zb_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_zcp_logits, labels=tf.ones_like(self.D_zcp_logits))
+        )
+
+        # adversarial loss of discriminator on image Dimg
         self.D_img_loss_input = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_input_logits, labels=tf.ones_like(self.D_input_logits))
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_input_logits, labels=tf.ones_like(self.D_input_logits))
         )
-        self.D_img_loss_G = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_G_logits, labels=tf.zeros_like(self.D_G_logits))
+        self.D_img_loss_Gs = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_Gs_logits, labels=tf.zeros_like(self.D_Gs_logits))
         )
-        self.G_img_loss = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_G_logits, labels=tf.ones_like(self.D_G_logits))
+        self.D_img_loss_Gp = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_Gp_logits, labels=tf.zeros_like(self.D_Gp_logits))
         )
+        self.G_img_loss_Gs = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_Gs_logits, labels=tf.ones_like(self.D_Gs_logits))
+        )
+        self.G_img_loss_Gp = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_Gp_logits, labels=tf.ones_like(self.D_Gp_logits))
+        )
+
+        # Kullback-Leibler loss w.r.t uniform gaussian distribution
+        self.kl_loss = KL_loss(self.z_cs) + KL_loss(self.z_cp)
 
         # total variation to smooth the generated image
-        tv_y_size = self.size_image
-        tv_x_size = self.size_image
-        self.tv_loss = (
-            (tf.nn.l2_loss(self.G[:, 1:, :, :] - self.G[:, :self.size_image - 1, :, :]) / tv_y_size) +
-            (tf.nn.l2_loss(self.G[:, :, 1:, :] - self.G[:, :, :self.size_image - 1, :]) / tv_x_size)) / self.size_batch
+        # tv_y_size = self.size_image
+        # tv_x_size = self.size_image
+        # self.tv_loss = (
+        #     (tf.nn.l2_loss(self.G[:, 1:, :, :] - self.G[:, :self.size_image - 1, :, :]) / tv_y_size) +
+        #     (tf.nn.l2_loss(self.G[:, :, 1:, :] - self.G[:, :, :self.size_image - 1, :]) / tv_x_size)) / self.size_batch
 
         # *********************************** trainable variables ****************************************************
         trainable_variables = tf.trainable_variables()
