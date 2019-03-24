@@ -4,8 +4,8 @@ import numpy as np
 from scipy.misc import imread, imresize, imsave
 
 
-def conv2d(input_map, num_output_channels, size_kernel=5, stride=2, name='conv2d'):
-    with tf.variable_scope(name):
+def conv2d(input_map, num_output_channels, size_kernel=5, stride=2, name='conv2d', reuse=False):
+    with tf.variable_scope(name, reuse=reuse):
         # stddev = np.sqrt(2.0 / (np.sqrt(input_map.get_shape()[-1].value * num_output_channels) * size_kernel ** 2))
         stddev = .02
         kernel = tf.get_variable(
@@ -24,8 +24,8 @@ def conv2d(input_map, num_output_channels, size_kernel=5, stride=2, name='conv2d
         return tf.nn.bias_add(conv, biases)
 
 
-def fc(input_vector, num_output_length, name='fc'):
-    with tf.variable_scope(name):
+def fc(input_vector, num_output_length, name='fc', reuse=False):
+    with tf.variable_scope(name, reuse=reuse):
         # stddev = np.sqrt(1.0 / (np.sqrt(input_vector.get_shape()[-1].value * num_output_length)))
         stddev = .02
         w = tf.get_variable(
@@ -43,8 +43,8 @@ def fc(input_vector, num_output_length, name='fc'):
         return tf.matmul(input_vector, w) + b
 
 
-def deconv2d(input_map, output_shape, size_kernel=5, stride=2, stddev=0.02, biased=True, name='deconv2d'):
-    with tf.variable_scope(name):
+def deconv2d(input_map, output_shape, size_kernel=5, stride=2, stddev=0.02, biased=True, name='deconv2d', reuse=False):
+    with tf.variable_scope(name, reuse=reuse):
         # stddev = np.sqrt(1.0 / (np.sqrt(input_map.get_shape()[-1].value * output_shape[-1]) * size_kernel ** 2))
         stddev = .02
         # filter : [height, width, output_channels, in_channels]
@@ -119,15 +119,16 @@ def save_batch_images(
         frame[(ind_row * img_h):(ind_row * img_h + img_h), (ind_col * img_w):(ind_col * img_w + img_w), :] = image
     imsave(save_path, frame)
 
-def batch_norm(x, is_training=True, name='batch_norm'):
-    return tf.layers.batch_normalization(x,
-                                         momentum=0.9,
-                                         epsilon=1e-05,
-                                         training=is_training,
-                                         name=name)
+def batch_norm(x, is_training=True, name='batch_norm', reuse=False):
+    with tf.variable_scope(name, reuse=reuse):
+        return tf.layers.batch_normalization(x,
+                                             momentum=0.9,
+                                             epsilon=1e-05,
+                                             training=is_training,
+                                             name=name)
 
-def condition_batch_norm(x, z, is_training=True, name='batch_norm'):
-    with tf.variable_scope(name):
+def condition_batch_norm(x, z, is_training=True, name='batch_norm', reuse=False):
+    with tf.variable_scope(name, reuse=reuse):
         _, _, _, c = x.get_shape().as_list()
         decay = 0.9
         epsilon = 1e-05
@@ -152,8 +153,8 @@ def condition_batch_norm(x, z, is_training=True, name='batch_norm'):
         else:
             return tf.nn.batch_normalization(x, test_mean, test_var, beta, gamma, epsilon)
 
-def projection(digits, y, name='projection'):
-    with tf.variable_scope(name):
+def projection(digits, y, name='projection', reuse=False):
+    with tf.variable_scope(name, reuse=reuse):
         H = y.shape[-1]# y:(b, c)
         W = digits.shape[-1]# digits: (b, d)
         V = tf.get_variable("V", [H, W], initializer=tf.truncated_normal_initializer(stddev=0.02))# V: (c, d)
