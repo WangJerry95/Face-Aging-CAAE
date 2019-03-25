@@ -22,17 +22,17 @@ class FaceAging(object):
                  session,  # TensorFlow session
                  size_image=128,  # size the input images
                  size_kernel=5,  # size of the kernels in convolution and deconvolution
-                 size_batch=100,  # mini-batch size for training and testing, must be square of an integer
+                 size_batch=64,  # mini-batch size for training and testing, must be square of an integer
                  num_input_channels=3,  # number of channels of input images
                  num_encoder_channels=64,  # number of channels of the first conv layer of encoder
-                 num_z_channels=50,  # number of channels of the layer z (noise or code)
+                 num_z_channels=200,  # number of channels of the layer z (noise or code)
                  num_categories=10,  # number of categories (age segments) in the training dataset
                  num_gen_channels=1024,  # number of channels of the first deconv layer of generator
                  enable_tile_label=True,  # enable to tile the label
                  tile_ratio=1.0,  # ratio of the length between tiled label and z
                  is_training=True,  # flag for training or testing mode
                  save_dir='./save',  # path to save checkpoints, samples, and summary
-                 dataset_name='UTKFace'  # name of the dataset in the folder ./data
+                 dataset_name='sketch2photo'  # name of the dataset in the folder ./data
                  ):
 
         self.session = session
@@ -72,11 +72,11 @@ class FaceAging(object):
             [self.size_batch, 2],
             name='gender_labels'
         )
-        # self.z_prior = tf.placeholder(
-        #     tf.float32,
-        #     [self.size_batch, self.num_z_channels],
-        #     name='z_prior'
-        # )
+        self.z_prior = tf.placeholder(
+            tf.float32,
+            [self.size_batch, self.num_z_channels],
+            name='z_prior'
+        )
         # ************************************* build the graph *******************************************************
         print '\n\tBuilding graph ...'
 
@@ -118,15 +118,34 @@ class FaceAging(object):
                 reuse_variables=True
             )
 
-        # discriminator on z_cs and z_cp
+        # discriminator on z_cs and z_cp and z_prior
         with tf.name_scope('Discriminater_z'):
             self.D_zcs, self.D_zcs_logits = self.discriminator_z(
                 z=self.z_cs,
-                is_training=self.is_training
+                is_training=self.is_training,
+                name='D_z'
             )
             self.D_zcp, self.D_zcp_logits = self.discriminator_z(
                 z=self.z_cp,
                 is_training=self.is_training,
+                name='D_z',
+                reuse_variables=True
+            )
+            self.D_prior, self.D_prior_logits = self.discriminator_z(
+                z=self.z_prior,
+                is_training=self.is_training,
+                name='D_prior'
+            )
+            self.D_prior_s, self.D_prior_s_logits = self.discriminator_z(
+                z=self.z_cs,
+                is_training=self.is_training,
+                name='D_prior',
+                reuse_variables=True
+            )
+            self.D_prior_p, self.D_prior_p_logits = self.discriminator_z(
+                z=self.z_cp,
+                is_training=self.is_training,
+                name='D_prior',
                 reuse_variables=True
             )
 
@@ -195,7 +214,22 @@ class FaceAging(object):
         self.E_zp_loss = tf.reduce_mean(
             tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_zcp_logits, labels=tf.ones_like(self.D_zcp_logits))
         )
-
+        # adversarial loss of discriminator on prior z
+        self.D_prior_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_prior_logits, labels=tf.ones_like(self.D_prior_logits))
+        )
+        self.D_prior_s_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_prior_s, labels=tf.zeros_like(self.D_prior_s))
+        )
+        self.D_prior_p_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_prior_p, labels=tf.zeros_like(self.D_prior_p))
+        )
+        self.E_prior_p_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_prior_p, labels=tf.ones_like(self.D_prior_p))
+        )
+        self.E_prior_s_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_prior_s, labels=tf.ones_like(self.D_prior_s))
+        )
         # adversarial loss of discriminator on image D_img
         self.D_img_loss_input = tf.reduce_mean(
             tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_input_logits, labels=tf.ones_like(self.D_input_logits))
@@ -214,7 +248,7 @@ class FaceAging(object):
         )
 
         # Kullback-Leibler loss w.r.t uniform gaussian distribution
-        self.kl_loss = KL_loss(self.z_cs) + KL_loss(self.z_cp)
+        #self.kl_loss = KL_loss(self.z_cs) + KL_loss(self.z_cp)
 
         # total variation to smooth the generated image
         # tv_y_size = self.size_image
@@ -231,13 +265,15 @@ class FaceAging(object):
         self.G_variables = [var for var in trainable_variables if 'G_' in var.name]
         # variables of discriminator on z
         self.D_z_variables = [var for var in trainable_variables if 'D_z_' in var.name]
+        # variables of discriminator on prior z'
+        self.D_prior_variables = [var for var in trainable_variables if 'D_prior_' in var.name]
         # variables of discriminator on image
         self.D_img_variables = [var for var in trainable_variables if 'D_img_' in var.name]
 
         # ************************************* collect the summary ***************************************
         # summary for latent vector
-        self.z_cp_summary = tf.summary.histogram('z', self.z_cp)
-        self.z_cs_summary = tf.summary.histogram('z', self.z_cs)
+        self.z_cp_summary = tf.summary.histogram('z_cp', self.z_cp)
+        self.z_cs_summary = tf.summary.histogram('z_cs', self.z_cs)
         # summary for recon losses
         self.Recon_latent_loss_summary = tf.summary.scalar('Recon_latent_loss', self.Recon_latent_loss)
         self.Recon_image_loss_summary = tf.summary.scalar('Recon_image_loss', self.Recon_image_loss)
@@ -246,6 +282,12 @@ class FaceAging(object):
         self.D_zp_loss_summary = tf.summary.scalar('D_zp_loss', self.D_zp_loss)
         self.E_zs_loss_summary = tf.summary.scalar('E_zs_loss', self.E_zs_loss)
         self.E_zp_loss_summary = tf.summary.scalar('E_zp_loss', self.E_zp_loss)
+        # summary for adversarial loss of D_prior
+        self.D_prior_loss_summary = tf.summary.scalar('D_prior_loss', self.D_prior_loss)
+        self.D_prior_s_loss_summary = tf.summary.scalar('D_prior_s_loss', self.D_prior_s_loss)
+        self.D_prior_p_loss_summary = tf.summary.scalar('D_prior_p_loss', self.D_prior_p_loss)
+        self.E_prior_p_loss_summary = tf.summary.scalar('E_prior_p_loss', self.E_prior_p_loss)
+        self.E_prior_s_loss_summary = tf.summary.scalar('E_prior_s_loss', self.E_prior_s_loss)
         # summary for adversarial loss of D_img
         self.D_img_loss_input_summary = tf.summary.scalar('D_img_loss_input', self.D_img_loss_input)
         self.D_img_loss_Gs_summary = tf.summary.scalar('D_img_loss_Gs', self.D_img_loss_Gs)
@@ -253,18 +295,18 @@ class FaceAging(object):
         self.G_img_loss_Gs_summary = tf.summary.scalar('G_img_loss_Gs', self.G_img_loss_Gs)
         self.G_img_loss_Gp_summary = tf.summary.scalar('G_img_loss_Gp', self.G_img_loss_Gp)
         # summary for KL loss
-        self.kl_loss_summary = tf.summary.scalar('kl_loss', self.kl_loss)
+        # self.kl_loss_summary = tf.summary.scalar('kl_loss', self.kl_loss)
 
 
     def train(self,
               num_epochs=200,  # number of epochs
-              learning_rate=0.0002,  # learning rate of optimizer
+              learning_rate=0.00001,  # learning rate of optimizer
               beta1=0.5,  # parameter for Adam optimizer
-              decay_rate=1.0,  # learning rate decay (0, 1], 1 means no decay
+              decay_rate=0.9,  # learning rate decay (0, 1], 1 means no decay
               enable_shuffle=True,  # enable shuffle of the dataset
               use_trained_model=True,  # use the saved checkpoint to initialize the network
               use_init_model=True,  # use the init model to initialize the network
-              weights=(10, 10)  # the weights of adversarial loss and TV loss
+              weights=(0.0001, 0.0001, 0.0001)  # the weights of adversarial loss and TV loss
               ):
 
         # *************************** load file names of images ******************************************************
@@ -282,16 +324,19 @@ class FaceAging(object):
 
         # *********************************** optimizer **************************************************************
         # over all, there are three loss functions, weights may differ from the paper because of different datasets
-        self.loss_EG = self.G_img_loss_Gs + \
-                       self.G_img_loss_Gp + \
-                       self.E_zp_loss + \
-                       self.E_zs_loss + \
-                       weights[0] * self.Recon_image_loss + \
-                       weights[1] * self.Recon_latent_loss
+        self.loss_EG = self.Recon_image_loss + \
+                       self.Recon_latent_loss + \
+                       weights[0] * self.G_img_loss_Gs + \
+                       weights[0] * self.G_img_loss_Gp + \
+                       weights[1] * self.E_zp_loss + \
+                       weights[1] * self.E_zs_loss + \
+                       weights[2] * self.E_prior_p_loss + \
+                       weights[2] * self.E_prior_s_loss
 
-        self.loss_Dz = self.D_zs_loss + self.D_zp_loss
-        self.loss_Di = self.D_img_loss_input + self.D_img_loss_Gs + self.D_img_loss_Gp
-        self.loss_KL = self.kl_loss
+        self.loss_Dz =  self.D_zs_loss + self.D_zp_loss
+        self.loss_Di = 2*self.D_img_loss_input + self.D_img_loss_Gs + self.D_img_loss_Gp
+        self.loss_Dp = 2*self.D_prior_loss + self.D_prior_s_loss + self.D_prior_p_loss
+        # self.loss_KL = self.kl_loss
 
         # set learning rate decay
         with tf.variable_scope('global_scope', reuse=tf.AUTO_REUSE):
@@ -325,6 +370,14 @@ class FaceAging(object):
                 loss=self.loss_Dz,
                 var_list=self.D_z_variables
             )
+            # optimizer for discriminator on prior
+            self.D_prior_optimizer = tf.train.AdamOptimizer(
+                learning_rate=EG_learning_rate,
+                beta1=beta1
+            ).minimize(
+                loss=self.loss_Dp,
+                var_list=self.D_prior_variables
+            )
             # optimizer for discriminator on image
             self.D_img_optimizer = tf.train.AdamOptimizer(
                 learning_rate=EG_learning_rate,
@@ -333,14 +386,14 @@ class FaceAging(object):
                 loss=self.loss_Di,
                 var_list=self.D_img_variables
             )
-            # optimizer for encoder
-            self.E_optimizer = tf.train.AdamOptimizer(
-                learning_rate=EG_learning_rate,
-                beta1=beta1
-            ).minimize(
-                loss=self.loss_KL,
-                var_list=self.E_variables
-            )
+            # # optimizer for encoder
+            # self.E_optimizer = tf.train.AdamOptimizer(
+            #     learning_rate=EG_learning_rate,
+            #     beta1=beta1
+            # ).minimize(
+            #     loss=self.loss_KL,
+            #     var_list=self.E_variables
+            # )
 
         # *********************************** tensorboard *************************************************************
         # for visualization (TensorBoard): $ tensorboard --logdir path/to/log-directory
@@ -352,7 +405,8 @@ class FaceAging(object):
             self.E_zs_loss_summary, self.E_zp_loss_summary,
             self.D_img_loss_input_summary, self.D_img_loss_Gs_summary, self.D_img_loss_Gp_summary,
             self.G_img_loss_Gs_summary, self.G_img_loss_Gp_summary,
-            self.kl_loss_summary,
+            self.D_prior_loss_summary, self.D_prior_s_loss_summary, self.D_prior_p_loss_summary,
+            self.E_prior_p_loss_summary, self.E_prior_s_loss_summary,
             self.EG_learning_rate_summary,
         ])
         self.writer = tf.summary.FileWriter(os.path.join(self.save_dir, 'summary'), self.session.graph)
@@ -381,15 +435,15 @@ class FaceAging(object):
             sample_sketch_images = np.array(sample_sketch).astype(np.float32)
             sample_photo_images = np.array(sample_photo).astype(np.float32)
         sample_label_age = np.zeros(
-            shape=(len(photo_names), self.num_categories),
+            shape=(self.size_batch, self.num_categories),
             dtype=np.float32
         )
         sample_label_gender = np.zeros(
-            shape=(len(photo_names), 2),
+            shape=(self.size_batch, 2),
             dtype=np.float32
         )
-        for i, label in enumerate(photo_names):
-            label = int(str(photo_names[i]).split('/')[-1].split('_')[0])
+        for i, label in enumerate(sample_photo_files):
+            label = int(str(sample_photo_files[i]).split('/')[-1].split('_')[0])
             if 0 <= label <= 5:
                 label = 0
             elif 6 <= label <= 10:
@@ -426,13 +480,13 @@ class FaceAging(object):
                 print("\tFAILED >_<!")
                 # load init model
                 if use_init_model:
-                    if not os.path.exists('init_model/model-init.data-00000-of-00001'):
-                        from init_model.zip_opt import join
-                        try:
-                            join('init_model/model_parts', 'init_model/model-init.data-00000-of-00001')
-                        except:
-                            raise Exception('Error joining files')
-                    self.load_checkpoint(model_path='init_model')
+                    # if not os.path.exists('pretrain/checkpoint/model-init.data-00000-of-00001'):
+                    #     from init_model.zip_opt import join
+                    #     try:
+                    #         join('init_model/model_parts', 'init_model/model-init.data-00000-of-00001')
+                    #     except:
+                    #         raise Exception('Error joining files')
+                    self.load_checkpoint(model_path='pretrain/checkpoint')
 
 
         # epoch iteration
@@ -465,15 +519,15 @@ class FaceAging(object):
                     batch_photo_images = np.array(photo_batch).astype(np.float32)
                     batch_sketch_images = np.array(sketch_batch).astype(np.float32)
                 batch_label_age = np.zeros(
-                    shape=(len(batch_photo_images), self.num_categories),
+                    shape=(self.size_batch, self.num_categories),
                     dtype=np.float
                 )
                 batch_label_gender = np.zeros(
-                    shape=(len(batch_photo_images), 2),
+                    shape=(self.size_batch, 2),
                     dtype=np.float
                 )
                 for i, label in enumerate(batch_photo_images):
-                    label = int(str(batch_photo_images[i]).split('/')[-1].split('_')[0])
+                    label = int(str(batch_photo_files[i]).split('/')[-1].split('_')[0])
                     if 0 <= label <= 5:
                         label = 0
                     elif 6 <= label <= 10:
@@ -495,41 +549,46 @@ class FaceAging(object):
                     else:
                         label = 9
                     batch_label_age[i, label] = 1
-                    gender = int(str(batch_photo_images[i]).split('/')[-1].split('_')[1])
+                    gender = int(str(batch_photo_files[i]).split('/')[-1].split('_')[1])
                     batch_label_gender[i, gender] = 1
 
                 # prior distribution on the prior of z
-                # batch_z_prior = np.random.uniform(
-                #     self.image_value_range[0],
-                #     self.image_value_range[-1],
-                #     [self.size_batch, self.num_z_channels]
-                # ).astype(np.float32)
+                batch_z_prior = 500*np.random.uniform(
+                    self.image_value_range[0],
+                    self.image_value_range[-1],
+                    [self.size_batch, self.num_z_channels]
+                ).astype(np.float32)
 
                 # update
-                train_summary,_, _, _, _, Recon_img, Recon_latent, D_zs, D_zp, E_zs, E_zp, D_i_input,\
-                D_i_Gs, D_i_Gp, G_i_Gs, G_i_Gp, kl = self.session.run(
+                train_summary,_, _, _, _, Recon_img, Recon_latent, D_zs, D_zp, E_zs, E_zp, \
+                D_p, D_p_s, D_p_p, E_p_p, E_p_s, D_i_input, D_i_Gs, D_i_Gp, G_i_Gs, G_i_Gp = self.session.run(
                     fetches = [
                         self.summary,
                         self.EG_optimizer,
                         self.D_z_optimizer,
                         self.D_img_optimizer,
-                        self.E_optimizer,
+                        self.D_prior_optimizer,
                         self.Recon_image_loss,
                         self.Recon_latent_loss,
                         self.D_zs_loss,
                         self.D_zp_loss,
                         self.E_zs_loss,
                         self.E_zp_loss,
+                        self.D_prior_loss,
+                        self.D_prior_s_loss,
+                        self.D_prior_p_loss,
+                        self.E_prior_p_loss,
+                        self.E_prior_s_loss,
                         self.D_img_loss_input,
                         self.D_img_loss_Gs,
                         self.D_img_loss_Gp,
                         self.G_img_loss_Gs,
                         self.G_img_loss_Gp,
-                        self.kl_loss
                     ],
                     feed_dict={
                         self.input_photos: batch_photo_images,
                         self.input_sketches: batch_sketch_images,
+                        self.z_prior: batch_z_prior,
                         self.age: batch_label_age,
                         self.gender: batch_label_gender,
                     }
@@ -538,8 +597,10 @@ class FaceAging(object):
                 print("\nEpoch: [%3d/%3d] Batch: [%3d/%3d]\n\tRecon_img=%.4f\tRecon_latent=%.4f" %
                     (epoch+1, num_epochs, ind_batch+1, num_batches, Recon_img, Recon_latent))
                 print("\tD_zs=%.4f\tD_zp=%.4f\tE_zs=%.4f\tE_zp=%.4f" % (D_zs, D_zp, E_zs, E_zp))
-                print("\tD_i_input=%.4f\tD_i_Gs=%.4f\tD_i_Gp=%.4f\tG_i_Gs=%.4f\tG_i_Gp=%.4f" % (D_i_input, D_i_Gs, D_i_Gp, G_i_Gs, G_i_Gp))
-                print("\tkl_loss=%.4f" % kl)
+                print("\tD_i_input=%.4f\tD_i_Gs=%.4f\tD_i_Gp=%.4f\tG_i_Gs=%.4f\tG_i_Gp=%.4f" % (
+                    D_i_input, D_i_Gs, D_i_Gp, G_i_Gs, G_i_Gp))
+                print("\tD_p=%.4f\tD_p_s=%.4f\tD_p_p=%.4f\tE_p_p=%.4f\tE_p_s=%.4f" % (
+                    D_p, D_p_s, D_p_p, E_p_p, E_p_s))
 
                 # estimate left run time
                 elapse = time.time() - start_time
@@ -758,33 +819,33 @@ class FaceAging(object):
         # output
         return tf.nn.tanh(current)
 
-    def discriminator_z(self, z, is_training=True, reuse_variables=False, num_hidden_layer_channels=(64, 32, 16), enable_bn=True):
+    def discriminator_z(self, z, is_training=True, reuse_variables=False, num_hidden_layer_channels=(64, 32, 16), enable_bn=True, name='D_z'):
         current = z
         # fully connection layer
         for i in range(len(num_hidden_layer_channels)):
-            name = 'D_z_fc' + str(i)
+            scope = name + '_fc' + str(i)
             current = fc(
                     input_vector=current,
                     num_output_length=num_hidden_layer_channels[i],
-                    name=name,
+                    name=scope,
                     reuse=reuse_variables
                 )
             if enable_bn:
-                name = 'D_z_bn' + str(i)
+                scope = name + '_bn' + str(i)
                 current = tf.contrib.layers.batch_norm(
                     current,
                     scale=False,
                     is_training=is_training,
-                    scope=name,
+                    scope=scope,
                     reuse=reuse_variables
                 )
             current = tf.nn.relu(current)
         # output layer
-        name = 'D_z_fc' + str(i+1)
+        scope = name + '_fc' + str(i+1)
         current = fc(
             input_vector=current,
             num_output_length=1,
-            name=name,
+            name=scope,
             reuse=reuse_variables
         )
         return tf.nn.sigmoid(current), current
@@ -893,7 +954,7 @@ class FaceAging(object):
 
     def load_checkpoint(self, model_path=None):
         if model_path is None:
-            print("\n\tLoading pre-trained model ...")
+            print("\n\tLoading trained model ...")
             checkpoint_dir = os.path.join(self.save_dir, 'checkpoint')
         else:
             print("\n\tLoading init model ...")
@@ -947,14 +1008,14 @@ class FaceAging(object):
         labels = np.arange(size_sample)
         labels = np.repeat(labels, size_sample)
         query_labels = np.zeros(
-            shape=(size_sample ** 2, size_sample),
+            shape=(size_sample ** 2, self.num_categories),
             dtype=np.float32
         )
         for i in range(query_labels.shape[0]):
             query_labels[i, labels[i]] = 1
-        query_sketch_images = np.tile(sketch_images, [self.num_categories, 1, 1, 1])
-        query_photo_images = np.tile(photo_images, [self.num_categories, 1, 1, 1])
-        query_gender = np.tile(gender, [self.num_categories, 1])
+        query_sketch_images = np.tile(sketch_images, [int(np.sqrt(self.size_batch)), 1, 1, 1])
+        query_photo_images = np.tile(photo_images, [int(np.sqrt(self.size_batch)), 1, 1, 1])
+        query_gender = np.tile(gender, [int(np.sqrt(self.size_batch)), 1])
         G_p, G_s = self.session.run(
             [self.G_p, self.G_s],
             feed_dict={

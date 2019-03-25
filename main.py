@@ -17,8 +17,8 @@ def str2bool(v):
 
 parser = argparse.ArgumentParser(description='CAAE')
 parser.add_argument('--is_train', type=str2bool, default=True)
-parser.add_argument('--epoch', type=int, default=50, help='number of epochs')
-parser.add_argument('--dataset', type=str, default='UTKFace', help='training dataset name that stored in ./data')
+parser.add_argument('--epoch', type=int, default=100, help='number of epochs')
+parser.add_argument('--dataset', type=str, default='sketch2photo', help='training dataset name that stored in ./data')
 parser.add_argument('--savedir', type=str, default='save', help='dir of saving checkpoints and intermediate training results')
 parser.add_argument('--testdir', type=str, default='None', help='dir of testing images')
 parser.add_argument('--use_trained_model', type=str2bool, default=True, help='whether train from an existing model or from scratch')
@@ -51,9 +51,10 @@ def main(_):
                     num_epochs=10,  # number of epochs
                     use_trained_model=FLAGS.use_trained_model,
                     use_init_model=FLAGS.use_init_model,
-                    weigts=(0, 0, 0)
+                    weights=(0, 0, 0)
                 )
                 print '\n\tPre-train is done! The training will start.'
+                FLAGS.use_trained_model=True
             model.save_dir = 'save'
             model.train(
                 num_epochs=FLAGS.epoch,  # number of epochs
