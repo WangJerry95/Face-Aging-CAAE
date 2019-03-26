@@ -4,10 +4,10 @@ import numpy as np
 from scipy.misc import imread, imresize, imsave
 
 
-def conv2d(input_map, num_output_channels, size_kernel=5, stride=2, name='conv2d', reuse=False):
+def conv2d(input_map, num_output_channels, size_kernel=5, stride=2, name='conv2d', sn=True, reuse=False):
     with tf.variable_scope(name, reuse=reuse):
         # stddev = np.sqrt(2.0 / (np.sqrt(input_map.get_shape()[-1].value * num_output_channels) * size_kernel ** 2))
-        stddev = .02
+        stddev = .2
         kernel = tf.get_variable(
             name='w',
             shape=[size_kernel, size_kernel, input_map.get_shape()[-1], num_output_channels],
@@ -20,14 +20,17 @@ def conv2d(input_map, num_output_channels, size_kernel=5, stride=2, name='conv2d
             dtype=tf.float32,
             initializer=tf.constant_initializer(0.0)
         )
-        conv = tf.nn.conv2d(input_map, kernel, strides=[1, stride, stride, 1], padding='SAME')
+        if sn:
+            conv = tf.nn.conv2d(input_map, spectral_norm(kernel), strides=[1, stride, stride, 1], padding='SAME')
+        else:
+            conv = tf.nn.conv2d(input_map, kernel, strides=[1, stride, stride, 1], padding='SAME')
         return tf.nn.bias_add(conv, biases)
 
 
-def fc(input_vector, num_output_length, name='fc', reuse=False):
+def fc(input_vector, num_output_length, name='fc', sn=True, reuse=False):
     with tf.variable_scope(name, reuse=reuse):
         # stddev = np.sqrt(1.0 / (np.sqrt(input_vector.get_shape()[-1].value * num_output_length)))
-        stddev = .02
+        stddev = .2
         w = tf.get_variable(
             name='w',
             shape=[input_vector.get_shape()[1], num_output_length],
@@ -40,10 +43,13 @@ def fc(input_vector, num_output_length, name='fc', reuse=False):
             dtype=tf.float32,
             initializer=tf.constant_initializer(0.0)
         )
-        return tf.matmul(input_vector, w) + b
+        if sn:
+            return tf.matmul(input_vector, spectral_norm(w)) + b
+        else:
+            return tf.matmul(input_vector, w) + b
 
 
-def deconv2d(input_map, output_shape, size_kernel=5, stride=2, stddev=0.02, biased=True, name='deconv2d', reuse=False):
+def deconv2d(input_map, output_shape, size_kernel=5, stride=2, stddev=0.02, biased=True, name='deconv2d', sn=True, reuse=False):
     with tf.variable_scope(name, reuse=reuse):
         # stddev = np.sqrt(1.0 / (np.sqrt(input_map.get_shape()[-1].value * output_shape[-1]) * size_kernel ** 2))
         stddev = .02
@@ -61,7 +67,11 @@ def deconv2d(input_map, output_shape, size_kernel=5, stride=2, stddev=0.02, bias
                 dtype=tf.float32,
                 initializer=tf.constant_initializer(0.0)
             )
-        deconv = tf.nn.conv2d_transpose(input_map, kernel, strides=[1, stride, stride, 1], output_shape=output_shape)
+        if sn:
+            deconv = tf.nn.conv2d_transpose(input_map, spectral_norm(kernel), strides=[1, stride, stride, 1],
+                                            output_shape=output_shape)
+        else:
+            deconv = tf.nn.conv2d_transpose(input_map, kernel, strides=[1, stride, stride, 1], output_shape=output_shape)
         if biased:
             return tf.nn.bias_add(deconv, biases)
         else: return deconv
@@ -170,3 +180,43 @@ def KL_loss(digits, name='KL_loss'):
         z_mean, z_var = tf.nn.moments(digits, axes=[0,], keep_dims=True) # z_mean, z_var shape:(1, n)
         kl_loss = tf.squeeze(tf.reduce_mean(-0.5*(tf.log(z_var) - z_var - tf.square(z_mean) + 1), -1))
         return kl_loss
+
+def spectral_norm(w, iteration=1):
+    w_shape = w.shape.as_list()
+    w = tf.reshape(w, [-1, w_shape[-1]])
+
+    u = tf.get_variable("u", [1, w_shape[-1]], initializer=tf.random_normal_initializer(), trainable=False)
+
+    u_hat = u
+    v_hat = None
+    for i in range(iteration):
+        """
+        power iteration
+        Usually iteration = 1 will be enough
+        """
+        v_ = tf.matmul(u_hat, tf.transpose(w))
+        v_hat = tf.nn.l2_normalize(v_)
+
+        u_ = tf.matmul(v_hat, w)
+        u_hat = tf.nn.l2_normalize(u_)
+
+    u_hat = tf.stop_gradient(u_hat)
+    v_hat = tf.stop_gradient(v_hat)
+
+    sigma = tf.matmul(tf.matmul(v_hat, w), tf.transpose(u_hat))
+
+    with tf.control_dependencies([u.assign(u_hat)]):
+        w_norm = w / sigma
+        w_norm = tf.reshape(w_norm, w_shape)
+
+    return w_norm
+
+#TODO: Add hinge loss
+def hinge_loss(input_fake, input_real=None ,type='dis'):
+    if type == 'dis':
+        hinge_loss = tf.reduce_mean(tf.nn.relu(1-input_real)) + \
+                     tf.reduce_mean(tf.nn.relu(1+input_fake))
+    elif type == 'gen':
+        hinge_loss = -tf.reduce_mean(input_fake)
+    else: raise Exception("'type' must be either 'dis' or 'gen'!")
+    return hinge_loss

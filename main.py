@@ -48,7 +48,7 @@ def main(_):
                 print '\n\tPre-train the network'
                 model.save_dir = 'pretrain'
                 model.train(
-                    num_epochs=10,  # number of epochs
+                    num_epochs=5,  # number of epochs
                     use_trained_model=FLAGS.use_trained_model,
                     use_init_model=FLAGS.use_init_model,
                     weights=(0, 0, 0)
