@@ -12,6 +12,7 @@ import os
 import time
 from glob import glob
 import tensorflow as tf
+from tensorflow.contrib.tensorboard.plugins import projector
 import numpy as np
 from scipy.io import savemat
 from ops import *
@@ -166,72 +167,74 @@ class FaceAging(object):
 
         # ************************************* loss functions *******************************************************
         # reconstruction loss for latent vector and photo image
-        self.Recon_latent_loss_p = tf.nn.l2_loss(self.z_cp - self.z_rcp) / self.size_batch  # L2 loss
-        self.Recon_latent_loss_s = tf.nn.l2_loss(self.z_cs - self.z_rcs) / self.size_batch
-        self.Recon_image_loss = tf.reduce_mean(tf.abs(self.input_photos - self.G_p))  # L1 loss
+        with tf.name_scope('losses'):
+            self.Recon_latent_loss_p = tf.nn.l2_loss(self.z_cp - self.z_rcp) / self.size_batch  # L2 loss
+            self.Recon_latent_loss_s = tf.nn.l2_loss(self.z_cs - self.z_rcs) / self.size_batch
+            self.Recon_image_loss = tf.reduce_mean(tf.abs(self.input_photos - self.G_p))  # L1 loss
 
-        # adversarial loss of discriminator on latent vector Dz
-        self.D_zs_loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.D_zcs, labels=tf.zeros([self.D_zcs.shape[0]], dtype=tf.int32))
-        )
-        self.D_zp_loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.D_zcp, labels=tf.ones([self.D_zcp.shape[0]], dtype=tf.int32))
-        )
-        # adversarial loss of encoder on latent vector Dz
-        self.E_zs_loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.D_zcs, labels=tf.ones([self.D_zcs.shape[0]], dtype=tf.int32))
-        )
-        self.E_zp_loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.D_zcp, labels=tf.zeros([self.D_zcp.shape[0]], dtype=tf.int32))
-        )
-        # adversarial loss of discriminator on images
-        self.D_img_loss_p = hinge_loss(self.D_Gp, self.D_input, type='dis')
-        self.D_img_loss_s = hinge_loss(self.D_Gs, self.D_input, type='dis')
-        # adversarial loss of Generator on image
-        self.G_img_loss_s = hinge_loss(self.D_Gs, type='gen')
-        self.G_img_loss_p = hinge_loss(self.D_Gp, type='gen')
+            # adversarial loss of discriminator on latent vector Dz
+            self.D_zs_loss = tf.reduce_mean(
+                tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.D_zcs, labels=tf.zeros([self.D_zcs.shape[0]], dtype=tf.int32))
+            )
+            self.D_zp_loss = tf.reduce_mean(
+                tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.D_zcp, labels=tf.ones([self.D_zcp.shape[0]], dtype=tf.int32))
+            )
+            # adversarial loss of encoder on latent vector Dz
+            self.E_zs_loss = tf.reduce_mean(
+                tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.D_zcs, labels=tf.ones([self.D_zcs.shape[0]], dtype=tf.int32))
+            )
+            self.E_zp_loss = tf.reduce_mean(
+                tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.D_zcp, labels=tf.zeros([self.D_zcp.shape[0]], dtype=tf.int32))
+            )
+            # adversarial loss of discriminator on images
+            self.D_img_loss_p = hinge_loss(self.D_Gp, self.D_input, type='dis')
+            self.D_img_loss_s = hinge_loss(self.D_Gs, self.D_input, type='dis')
+            # adversarial loss of Generator on image
+            self.G_img_loss_s = hinge_loss(self.D_Gs, type='gen')
+            self.G_img_loss_p = hinge_loss(self.D_Gp, type='gen')
 
-        # Kullback-Leibler loss w.r.t uniform gaussian distribution
-        self.kl_loss = tf.nn.l2_loss(self.z_cp) + tf.nn.l2_loss(self.z_cs)
+            # Kullback-Leibler loss w.r.t uniform gaussian distribution
+            self.kl_loss = tf.nn.l2_loss(self.z_cp) + tf.nn.l2_loss(self.z_cs)
 
-        # total variation to smooth the generated image
-        # tv_y_size = self.size_image
-        # tv_x_size = self.size_image
-        # self.tv_loss = (
-        #     (tf.nn.l2_loss(self.G[:, 1:, :, :] - self.G[:, :self.size_image - 1, :, :]) / tv_y_size) +
-        #     (tf.nn.l2_loss(self.G[:, :, 1:, :] - self.G[:, :, :self.size_image - 1, :]) / tv_x_size)) / self.size_batch
+            # total variation to smooth the generated image
+            # tv_y_size = self.size_image
+            # tv_x_size = self.size_image
+            # self.tv_loss = (
+            #     (tf.nn.l2_loss(self.G[:, 1:, :, :] - self.G[:, :self.size_image - 1, :, :]) / tv_y_size) +
+            #     (tf.nn.l2_loss(self.G[:, :, 1:, :] - self.G[:, :, :self.size_image - 1, :]) / tv_x_size)) / self.size_batch
 
-        # *********************************** trainable variables ****************************************************
-        trainable_variables = tf.trainable_variables()
-        # variables of encoder
-        self.E_variables = [var for var in trainable_variables if 'E_' in var.name]
-        # variables of generator
-        self.G_variables = [var for var in trainable_variables if 'G_' in var.name]
-        # variables of discriminator on z
-        self.D_z_variables = [var for var in trainable_variables if 'D_z_' in var.name]
-        # variables of discriminator on image
-        self.D_img_variables = [var for var in trainable_variables if 'D_img_' in var.name]
+            # *********************************** trainable variables ****************************************************
+            trainable_variables = tf.trainable_variables()
+            # variables of encoder
+            self.E_variables = [var for var in trainable_variables if 'E_' in var.name]
+            # variables of generator
+            self.G_variables = [var for var in trainable_variables if 'G_' in var.name]
+            # variables of discriminator on z
+            self.D_z_variables = [var for var in trainable_variables if 'D_z_' in var.name]
+            # variables of discriminator on image
+            self.D_img_variables = [var for var in trainable_variables if 'D_img_' in var.name]
 
         # ************************************* collect the summary ***************************************
         # summary for latent vector
-        self.z_cp_summary = tf.summary.histogram('z_cp', self.z_cp)
-        self.z_cs_summary = tf.summary.histogram('z_cs', self.z_cs)
-        # summary for recon losses
-        self.Recon_latent_loss_p_summary = tf.summary.scalar('Recon_latent_loss_p', self.Recon_latent_loss_p)
-        self.Recon_latent_loss_s_summary = tf.summary.scalar('Recon_latent_loss_s', self.Recon_latent_loss_s)
-        self.Recon_image_loss_summary = tf.summary.scalar('Recon_image_loss', self.Recon_image_loss)
-        # summary for adversarial loss on z
-        self.D_zs_loss_summary = tf.summary.scalar('D_zs_loss', self.D_zs_loss)
-        self.D_zp_loss_summary = tf.summary.scalar('D_zp_loss', self.D_zp_loss)
-        self.E_zs_loss_summary = tf.summary.scalar('E_zs_loss', self.E_zs_loss)
-        self.E_zp_loss_summary = tf.summary.scalar('E_zp_loss', self.E_zp_loss)
-        # summary for adversarial loss on image
-        self.D_img_loss_s_summary = tf.summary.scalar('D_img_loss_s', self.D_img_loss_s)
-        self.D_img_loss_p_summary = tf.summary.scalar('D_img_loss_p', self.D_img_loss_p)
-        self.G_img_loss_s_summary = tf.summary.scalar('G_img_loss_s', self.G_img_loss_s)
-        self.G_img_loss_p_summary = tf.summary.scalar('G_img_loss_p', self.G_img_loss_p)
-        # summary for KL loss
-        self.kl_loss_summary = tf.summary.scalar('kl_loss', self.kl_loss)
+        with tf.name_scope('summary'):
+            self.z_cp_summary = tf.summary.histogram('z_cp', self.z_cp)
+            self.z_cs_summary = tf.summary.histogram('z_cs', self.z_cs)
+            # summary for recon losses
+            self.Recon_latent_loss_p_summary = tf.summary.scalar('Recon_latent_loss_p', self.Recon_latent_loss_p)
+            self.Recon_latent_loss_s_summary = tf.summary.scalar('Recon_latent_loss_s', self.Recon_latent_loss_s)
+            self.Recon_image_loss_summary = tf.summary.scalar('Recon_image_loss', self.Recon_image_loss)
+            # summary for adversarial loss on z
+            self.D_zs_loss_summary = tf.summary.scalar('D_zs_loss', self.D_zs_loss)
+            self.D_zp_loss_summary = tf.summary.scalar('D_zp_loss', self.D_zp_loss)
+            self.E_zs_loss_summary = tf.summary.scalar('E_zs_loss', self.E_zs_loss)
+            self.E_zp_loss_summary = tf.summary.scalar('E_zp_loss', self.E_zp_loss)
+            # summary for adversarial loss on image
+            self.D_img_loss_s_summary = tf.summary.scalar('D_img_loss_s', self.D_img_loss_s)
+            self.D_img_loss_p_summary = tf.summary.scalar('D_img_loss_p', self.D_img_loss_p)
+            self.G_img_loss_s_summary = tf.summary.scalar('G_img_loss_s', self.G_img_loss_s)
+            self.G_img_loss_p_summary = tf.summary.scalar('G_img_loss_p', self.G_img_loss_p)
+            # summary for KL loss
+            self.kl_loss_summary = tf.summary.scalar('kl_loss', self.kl_loss)
 
 
     def train(self,
@@ -260,12 +263,12 @@ class FaceAging(object):
 
         # *********************************** optimizer **************************************************************
         # over all, there are three loss functions, weights may differ from the paper because of different datasets
-        self.loss_VAE = self.Recon_image_loss + \
-                        self.Recon_latent_loss_s + \
-                        self.Recon_latent_loss_p + \
-                        weights[2] * self.kl_loss + \
-                        weights[1] * self.E_zp_loss + \
-                        weights[1] * self.E_zs_loss
+        self.loss_Recon = self.Recon_image_loss + \
+                          self.Recon_latent_loss_s + \
+                          self.Recon_latent_loss_p
+        self.loss_E = weights[2] * self.kl_loss + \
+                      weights[1] * self.E_zp_loss + \
+                      weights[1] * self.E_zs_loss
         self.loss_G =  weights[0] * self.G_img_loss_s + \
                        weights[0] * self.G_img_loss_p
         self.loss_D = weights[1] * (self.D_zs_loss + self.D_zp_loss) + \
@@ -293,7 +296,7 @@ class FaceAging(object):
             staircase=True
         )
         G_learning_rate = tf.train.exponential_decay(
-            learning_rate=learning_rate,
+            learning_rate=learning_rate*2,
             global_step=self.G_global_step,
             decay_steps=sketch_num / self.size_batch * 2,
             decay_rate=decay_rate,
@@ -313,7 +316,7 @@ class FaceAging(object):
                 learning_rate=E_learning_rate,
                 beta1=beta1
             ).minimize(
-                loss=self.loss_VAE,
+                loss=self.loss_E + self.loss_Recon,
                 global_step=self.E_global_step,
                 var_list=self.E_variables
             )
@@ -322,7 +325,7 @@ class FaceAging(object):
                 learning_rate=G_learning_rate,
                 beta1=beta1
             ).minimize(
-                loss=self.loss_VAE + self.loss_G,
+                loss=self.loss_G + self.loss_Recon,
                 global_step=self.G_global_step,
                 var_list=self.G_variables
             )
@@ -338,17 +341,19 @@ class FaceAging(object):
 
         # *********************************** tensorboard *************************************************************
         # for visualization (TensorBoard): $ tensorboard --logdir path/to/log-directory
-        self.E_learning_rate_summary = tf.summary.scalar('E_learning_rate', E_learning_rate)
-        self.summary = tf.summary.merge([
-            self.z_cp_summary, self.z_cs_summary,
-            self.Recon_latent_loss_p_summary, self.Recon_latent_loss_s_summary, self.Recon_image_loss_summary, self.kl_loss_summary,
-            self.D_zs_loss_summary, self.D_zp_loss_summary,
-            self.E_zs_loss_summary, self.E_zp_loss_summary,
-            self.D_img_loss_s_summary, self.D_img_loss_p_summary,
-            self.G_img_loss_s_summary, self.G_img_loss_p_summary,
-            self.E_learning_rate_summary
-        ])
-        self.writer = tf.summary.FileWriter(os.path.join(self.save_dir, 'summary'), self.session.graph)
+        with tf.name_scope("summary"):
+            self.E_learning_rate_summary = tf.summary.scalar('E_learning_rate', E_learning_rate)
+            self.summary = tf.summary.merge([
+                self.z_cp_summary, self.z_cs_summary,
+                self.Recon_latent_loss_p_summary, self.Recon_latent_loss_s_summary, self.Recon_image_loss_summary, self.kl_loss_summary,
+                self.D_zs_loss_summary, self.D_zp_loss_summary,
+                self.E_zs_loss_summary, self.E_zp_loss_summary,
+                self.D_img_loss_s_summary, self.D_img_loss_p_summary,
+                self.G_img_loss_s_summary, self.G_img_loss_p_summary,
+                self.E_learning_rate_summary
+            ])
+            self.writer = tf.summary.FileWriter(os.path.join(self.save_dir, 'summary'), self.session.graph)
+            embedding_assign = self.embedding_projector(self.z_cs, self.z_cp)
 
         # ************* get some random samples as testing data to visualize the learning process *********************
         sample_sketch_files = sketch_names[0:self.size_batch]
@@ -559,8 +564,8 @@ class FaceAging(object):
                 print("\tTime left: %02d:%02d:%02d" %
                       (int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60))
 
-                train_summary = self.session.run(
-                    fetches = [self.summary],
+                train_summary,_ = self.session.run(
+                    fetches = [self.summary, embedding_assign],
                     feed_dict={
                         self.input_photos: batch_photo_images,
                         self.input_sketches: batch_sketch_images,
@@ -573,9 +578,9 @@ class FaceAging(object):
             self.sample(sample_sketch_images, sample_photo_images, sample_label_age, sample_label_gender, name)
             self.test(sample_sketch_images, sample_photo_images, sample_label_gender, name)
 
-            # save checkpoint for each 5 epoch
-            if np.mod(epoch, 5) == 4:
-                self.save_checkpoint()
+            # save checkpoint for every epoch
+            #if np.mod(epoch, 5) == 4:
+            self.save_checkpoint()
 
         # save the trained model
         self.save_checkpoint()
@@ -901,7 +906,7 @@ class FaceAging(object):
         return tf.nn.sigmoid(current), current
 
     def save_checkpoint(self):
-        checkpoint_dir = os.path.join(self.save_dir, 'checkpoint')
+        checkpoint_dir = os.path.join(self.save_dir, 'summary')
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
         self.saver.save(
@@ -1047,3 +1052,34 @@ class FaceAging(object):
         print '\n\tDone! Results are saved as %s\n' % os.path.join(self.save_dir, 'test', 'test_as_xxx.png')
 
 
+    def embedding_projector(self, z_s, z_p, name='embedding'):
+        with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+            embedding_var = tf.get_variable('latent_embedding',[2*self.size_batch, self.num_z_channels])
+            z_concat = tf.concat([z_s, z_p], axis=0)
+            embedding_assign = embedding_var.assign(z_concat)
+            # Create a config object to write the configuration parameters
+            config = projector.ProjectorConfig()
+
+            # Add embedding variable
+            embedding = config.embeddings.add()
+            embedding.tensor_name = embedding_var.name
+
+            # Link this tensor to its metadata file (e.g. labels) -> we will create this file later
+            embedding.metadata_path = 'metadata.tsv'
+
+            # Write a projector_config.pbtxt in the logs_path.
+            # TensorBoard will read this file during startup.
+            projector.visualize_embeddings(self.writer, config)
+
+            # write the metadata
+            filename = os.path.join(self.save_dir, 'summary', 'metadata.tsv')
+            labels = np.concatenate((np.zeros([self.size_batch,],dtype=np.int32),
+                                     np.ones([self.size_batch,], dtype=np.int32)),
+                                    axis=0)
+            with open(filename, 'w') as f:
+                f.write("Index\tLabel\n")
+                for index, label in enumerate(labels):
+                    f.write("{}\t{}\n".format(index, label))
+            print('Metadata file saved in {}'.format(filename))
+
+            return embedding_assign
