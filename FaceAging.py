@@ -341,7 +341,7 @@ class FaceAging(object):
 
         # *********************************** tensorboard *************************************************************
         # for visualization (TensorBoard): $ tensorboard --logdir path/to/log-directory
-        with tf.name_scope("summary"):
+        with tf.name_scope("embedding"):
             self.E_learning_rate_summary = tf.summary.scalar('E_learning_rate', E_learning_rate)
             self.summary = tf.summary.merge([
                 self.z_cp_summary, self.z_cs_summary,
@@ -352,8 +352,29 @@ class FaceAging(object):
                 self.G_img_loss_s_summary, self.G_img_loss_p_summary,
                 self.E_learning_rate_summary
             ])
-            self.writer = tf.summary.FileWriter(os.path.join(self.save_dir, 'summary'), self.session.graph)
-            embedding_assign = self.embedding_projector(self.z_cs, self.z_cp)
+            self.writer = tf.summary.FileWriter(self.save_dir, self.session.graph)
+            projector_writer = tf.summary.FileWriter(os.path.join(self.save_dir, 'projector'), self.session.graph)
+
+            # embedding visualization for latent vector z
+            embedding_var = tf.Variable(tf.zeros([self.size_batch*2, self.num_z_channels],dtype=tf.float32),trainable=False,name='embedding_var')
+            config = projector.ProjectorConfig()
+            embedding = config.embeddings.add()
+            embedding.tensor_name = "embedding/embedding_var:0"
+            # Specify where you find the metadata
+            metadata_file_path = os.path.join(self.save_dir, 'projector','metadata.tsv')
+            embedding.metadata_path = metadata_file_path  # 'metadata.tsv'
+            labels = np.concatenate((np.zeros([self.size_batch,],dtype=np.int32),
+                                     np.ones([self.size_batch,], dtype=np.int32)),
+                                    axis=0)
+            # write the metadata
+            with open(metadata_file_path, 'w') as f:
+                for label in labels:
+                    f.write("{}\n".format(label))
+            print('Metadata file saved in {}'.format(metadata_file_path))
+            # Say that you want to visualise the embeddings
+            projector.visualize_embeddings(projector_writer, config)
+            projector_writer.close()
+            projector_saver = tf.train.Saver([embedding_var], max_to_keep=3)
 
         # ************* get some random samples as testing data to visualize the learning process *********************
         sample_sketch_files = sketch_names[0:self.size_batch]
@@ -414,7 +435,7 @@ class FaceAging(object):
 
         # ******************************************* training *******************************************************
         # initialize the graph
-        tf.global_variables_initializer().run()
+        self.session.run(tf.global_variables_initializer())
 
         # load check point
         if use_trained_model:
@@ -503,8 +524,8 @@ class FaceAging(object):
                 #     [self.size_batch, self.num_z_channels]
                 # ).astype(np.float32)
 
-                # update G
-                _, Recon_img, Recon_latent_p,Recon_latent_s, kl, E_zs, E_zp, D_zcs = self.session.run(
+                # update E
+                _, Recon_img, Recon_latent_p,Recon_latent_s, kl, E_zs, E_zp = self.session.run(
                     fetches = [
                         self.E_optimizer,
                         self.Recon_image_loss,
@@ -512,8 +533,7 @@ class FaceAging(object):
                         self.Recon_latent_loss_s,
                         self.kl_loss,
                         self.E_zs_loss,
-                        self.E_zp_loss,
-                        self.D_zcs
+                        self.E_zp_loss
                     ],
                     feed_dict={
                         self.input_photos: batch_photo_images,
@@ -525,7 +545,7 @@ class FaceAging(object):
                     (epoch+1, num_epochs, ind_batch+1, num_batches, Recon_img, Recon_latent_p, Recon_latent_s))
                 print("\tkl=%.4f\tE_zs=%.4f\tE_zp=%.4f" % (kl, E_zs, E_zp))
 
-                # update
+                # update G
                 _, G_i_p, G_i_s = self.session.run(
                     fetches = [
                         self.G_optimizer,
@@ -541,13 +561,15 @@ class FaceAging(object):
                 print("\tG_i_p=%.4f\tG_i_s=%.4f" % (G_i_p, G_i_s))
 
                 # update D
-                _, D_z_s, D_z_p, D_i_s, D_i_p = self.session.run(
+                _, D_z_s, D_z_p, D_i_s, D_i_p, z_cp, z_cs = self.session.run(
                     fetches = [
                         self.D_optimizer,
                         self.D_zs_loss,
                         self.D_zp_loss,
                         self.D_img_loss_s,
-                        self.D_img_loss_p
+                        self.D_img_loss_p,
+                        self.z_cp,
+                        self.z_cs
                     ],
                     feed_dict={
                         self.input_photos: batch_photo_images,
@@ -564,7 +586,11 @@ class FaceAging(object):
                 print("\tTime left: %02d:%02d:%02d" %
                       (int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60))
 
-                train_summary,_ = self.session.run(
+                # assign the embeddign value
+                z_concat = np.concatenate([z_cs, z_cp], axis=0)
+                embedding_assign = embedding_var.assign(z_concat)
+
+                train_summary, embedding = self.session.run(
                     fetches = [self.summary, embedding_assign],
                     feed_dict={
                         self.input_photos: batch_photo_images,
@@ -572,7 +598,9 @@ class FaceAging(object):
                         self.age: batch_label_age
                     }
                 )
-                self.writer.add_summary(train_summary[0], self.E_global_step.eval())
+                self.writer.add_summary(train_summary, self.E_global_step.eval())
+                projector_saver.save(self.session, os.path.join(self.save_dir,'projector','embedding.ckpt'),
+                                     self.E_global_step.eval())
             # save sample images for each epoch
             name = '{:02d}'.format(epoch+1)
             self.sample(sample_sketch_images, sample_photo_images, sample_label_age, sample_label_gender, name)
@@ -906,19 +934,19 @@ class FaceAging(object):
         return tf.nn.sigmoid(current), current
 
     def save_checkpoint(self):
-        checkpoint_dir = os.path.join(self.save_dir, 'summary')
+        checkpoint_dir = self.save_dir
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
         self.saver.save(
             sess=self.session,
-            save_path=os.path.join(checkpoint_dir, 'model'),
+            save_path=os.path.join(checkpoint_dir, 'model.ckpt'),
             global_step=self.E_global_step.eval()
         )
 
     def load_checkpoint(self, model_path=None):
         if model_path is None:
             print("\n\tLoading trained model ...")
-            checkpoint_dir = os.path.join(self.save_dir, 'checkpoint')
+            checkpoint_dir = self.save_dir
         else:
             print("\n\tLoading init model ...")
             checkpoint_dir = model_path
@@ -1050,36 +1078,3 @@ class FaceAging(object):
         self.test(images, gender_female, 'test_as_female.png')
 
         print '\n\tDone! Results are saved as %s\n' % os.path.join(self.save_dir, 'test', 'test_as_xxx.png')
-
-
-    def embedding_projector(self, z_s, z_p, name='embedding'):
-        with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
-            embedding_var = tf.get_variable('latent_embedding',[2*self.size_batch, self.num_z_channels])
-            z_concat = tf.concat([z_s, z_p], axis=0)
-            embedding_assign = embedding_var.assign(z_concat)
-            # Create a config object to write the configuration parameters
-            config = projector.ProjectorConfig()
-
-            # Add embedding variable
-            embedding = config.embeddings.add()
-            embedding.tensor_name = embedding_var.name
-
-            # Link this tensor to its metadata file (e.g. labels) -> we will create this file later
-            embedding.metadata_path = 'metadata.tsv'
-
-            # Write a projector_config.pbtxt in the logs_path.
-            # TensorBoard will read this file during startup.
-            projector.visualize_embeddings(self.writer, config)
-
-            # write the metadata
-            filename = os.path.join(self.save_dir, 'summary', 'metadata.tsv')
-            labels = np.concatenate((np.zeros([self.size_batch,],dtype=np.int32),
-                                     np.ones([self.size_batch,], dtype=np.int32)),
-                                    axis=0)
-            with open(filename, 'w') as f:
-                f.write("Index\tLabel\n")
-                for index, label in enumerate(labels):
-                    f.write("{}\t{}\n".format(index, label))
-            print('Metadata file saved in {}'.format(filename))
-
-            return embedding_assign

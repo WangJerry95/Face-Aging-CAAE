@@ -55,7 +55,7 @@ def main(_):
                 )
                 print '\n\tPre-train is done! The training will start.'
                 FLAGS.use_trained_model=True
-            model.save_dir = 'save'
+            model.save_dir = FLAGS.savedir
             model.train(
                 num_epochs=FLAGS.epoch,  # number of epochs
                 use_trained_model=FLAGS.use_trained_model,
