@@ -173,12 +173,13 @@ def projection(digits, y, name='projection', reuse=False):
         project = tf.reduce_sum(tf.multiply(project, digits), axis=1, keepdims=True)# (b,1)
         return project
 
-def KL_loss(digits, name='KL_loss'):
+def KL_loss(mean, log_sigma, name='KL_loss'):
     with tf.variable_scope(name):
         # digits shape: (b, n)
         # first compute the mean and var of sampled latent code
-        z_mean, z_var = tf.nn.moments(digits, axes=[0,], keep_dims=True) # z_mean, z_var shape:(1, n)
-        kl_loss = tf.squeeze(tf.reduce_mean(-0.5*(tf.log(z_var) - z_var - tf.square(z_mean) + 1), -1))
+        z_mean = mean
+        z_log_sigma = log_sigma
+        kl_loss = tf.reduce_mean(-0.5*(z_log_sigma - tf.exp(z_log_sigma) - tf.square(z_mean) + 1))
         return kl_loss
 
 def spectral_norm(w, iteration=1):
@@ -211,7 +212,7 @@ def spectral_norm(w, iteration=1):
 
     return w_norm
 
-#TODO: Add hinge loss
+
 def hinge_loss(input_fake, input_real=None ,type='dis'):
     if type == 'dis':
         hinge_loss = tf.reduce_mean(tf.nn.relu(1-input_real)) + \
