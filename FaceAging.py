@@ -146,7 +146,7 @@ class FaceAging(object):
                 name='E_p',
                 reuse_variables=True
             )
-            self.z_rcs = self.encoder_c(
+            self.z_rcs, self.z_rs_mean, self.z_rs_var = self.encoder_c(
                 self.z_rs,
                 reuse_variables=True
             )
@@ -155,7 +155,7 @@ class FaceAging(object):
                 name='E_p',
                 reuse_variables=True
             )
-            self.z_rcp = self.encoder_c(
+            self.z_rcp, self.z_rp_mean, self.z_rp_var = self.encoder_c(
                 self.z_rp,
                 reuse_variables=True
             )
@@ -164,8 +164,12 @@ class FaceAging(object):
         # ************************************* loss functions *******************************************************
         # reconstruction loss for latent vector and photo image
         with tf.name_scope('losses'):
-            self.Recon_latent_loss_p = tf.nn.l2_loss(self.z_cp - self.z_rcp) / self.size_batch  # L2 loss
-            self.Recon_latent_loss_s = tf.nn.l2_loss(self.z_cs - self.z_rcs) / self.size_batch
+            self.Recon_latent_loss_p_mean = tf.reduce_mean(tf.abs(self.z_p_mean-self.z_rp_mean))  # L1 loss
+            self.Recon_latent_loss_p_var = tf.reduce_mean(tf.abs(self.z_p_var-self.z_rp_var))
+            self.Recon_latent_loss_p = self.Recon_latent_loss_p_mean + self.Recon_latent_loss_p_var
+            self.Recon_latent_loss_s_mean = tf.reduce_mean(tf.abs(self.z_s_mean-self.z_rs_mean))
+            self.Recon_latent_loss_s_var = tf.reduce_mean(tf.abs(self.z_s_var - self.z_rs_var))
+            self.Recon_latent_loss_s = self.Recon_latent_loss_s_mean + self.Recon_latent_loss_s_var
             self.Recon_image_loss = tf.reduce_mean(tf.abs(self.input_photos - self.G_p))  # L1 loss
 
             # adversarial loss of discriminator on latent vector Dz
@@ -182,7 +186,7 @@ class FaceAging(object):
                                                                           [self.size_batch, 1]))
             )
             self.E_zp_loss = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_zcs,
+                tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.D_zcp,
                                                            labels=tf.tile(0.5 * tf.ones([1,2], dtype=tf.float32),
                                                                           [self.size_batch, 1]))
             )
@@ -219,10 +223,20 @@ class FaceAging(object):
         with tf.name_scope('z_summary'):
             self.z_cp_summary = tf.summary.histogram('z_cp', self.z_cp)
             self.z_cs_summary = tf.summary.histogram('z_cs', self.z_cs)
+            self.z_p_mean_summary = tf.summary.histogram('z_p_mean', self.z_p_mean)
+            self.z_p_var_summary = tf.summary.histogram('z_p_var', self.z_p_var)
+            self.z_s_mean_summary = tf.summary.histogram('z_s_mean', self.z_s_mean)
+            self.z_s_var_summary = tf.summary.histogram('z_s_var', self.z_s_var)
         with tf.name_scope('VAE_loss'):
             # summary for recon losses
-            self.Recon_latent_loss_p_summary = tf.summary.scalar('Recon_latent_loss_p', self.Recon_latent_loss_p)
-            self.Recon_latent_loss_s_summary = tf.summary.scalar('Recon_latent_loss_s', self.Recon_latent_loss_s)
+            self.Recon_latent_loss_p_mean_summary = tf.summary.scalar('Recon_latent_loss_p_mean',
+                                                                      self.Recon_latent_loss_p_mean)
+            self.Recon_latent_loss_p_var_summary = tf.summary.scalar('Recon_latent_loss_p_var',
+                                                                      self.Recon_latent_loss_p_var)
+            self.Recon_latent_loss_s_mean_summary = tf.summary.scalar('Recon_latent_loss_s_mean',
+                                                                      self.Recon_latent_loss_s_mean)
+            self.Recon_latent_loss_s_var_summary = tf.summary.scalar('Recon_latent_loss_s_var',
+                                                                      self.Recon_latent_loss_s_var)
             self.Recon_image_loss_summary = tf.summary.scalar('Recon_image_loss', self.Recon_image_loss)
             self.kl_loss_summary = tf.summary.scalar('kl_loss', self.kl_loss)
         with tf.name_scope('Adv_z_loss'):
@@ -267,8 +281,10 @@ class FaceAging(object):
         # *********************************** optimizer **************************************************************
         # over all, there are three loss functions, weights may differ from the paper because of different datasets
         self.loss_Recon = self.Recon_image_loss + \
-                          self.Recon_latent_loss_s + \
-                          self.Recon_latent_loss_p
+                          self.Recon_latent_loss_p_mean + \
+                          self.Recon_latent_loss_p_var + \
+                          self.Recon_latent_loss_s_mean + \
+                          self.Recon_latent_loss_s_var
         self.loss_E = weights[2] * self.kl_loss + \
                       weights[1] * self.E_zp_loss + \
                       weights[1] * self.E_zs_loss
@@ -347,8 +363,11 @@ class FaceAging(object):
         with tf.name_scope("embedding"):
             self.E_learning_rate_summary = tf.summary.scalar('E_learning_rate', E_learning_rate)
             self.summary = tf.summary.merge([
-                self.z_cp_summary, self.z_cs_summary,
-                self.Recon_latent_loss_p_summary, self.Recon_latent_loss_s_summary, self.Recon_image_loss_summary, self.kl_loss_summary,
+                self.z_cp_summary, self.z_cs_summary, self.z_p_mean_summary, self.z_p_var_summary,
+                self.z_s_mean_summary, self.z_s_var_summary,
+                self.Recon_latent_loss_p_mean_summary, self.Recon_latent_loss_p_var_summary,
+                self.Recon_latent_loss_s_mean_summary, self.Recon_latent_loss_s_var_summary,
+                self.Recon_image_loss_summary, self.kl_loss_summary,
                 self.D_zs_loss_summary, self.D_zp_loss_summary,
                 self.E_zs_loss_summary, self.E_zp_loss_summary,
                 self.D_img_loss_s_summary, self.D_img_loss_p_summary,
@@ -364,8 +383,8 @@ class FaceAging(object):
             embedding = config.embeddings.add()
             embedding.tensor_name = "embedding/embedding_var:0"
             # Specify where you find the metadata
-            metadata_file_path = os.path.join('projector','metadata.tsv')
-            embedding.metadata_path = metadata_file_path  # 'metadata.tsv'
+            metadata_file_path = os.path.join(self.save_dir,'projector','metadata.tsv')
+            embedding.metadata_path = 'metadata.tsv'  # 'metadata.tsv'
             labels = np.concatenate((np.zeros([self.size_batch,],dtype=np.int32),
                                      np.ones([self.size_batch,], dtype=np.int32)),
                                     axis=0)
@@ -454,7 +473,7 @@ class FaceAging(object):
                     #         join('init_model/model_parts', 'init_model/model-init.data-00000-of-00001')
                     #     except:
                     #         raise Exception('Error joining files')
-                    self.load_checkpoint(model_path='pretrain/checkpoint')
+                    self.load_checkpoint(model_path='pretrain/')
 
 
         # epoch iteration
@@ -601,17 +620,19 @@ class FaceAging(object):
                         self.age: batch_label_age
                     }
                 )
-                self.writer.add_summary(train_summary, self.E_global_step.eval())
-                projector_saver.save(self.session, os.path.join(self.save_dir,'projector','embedding.ckpt'),
-                                     self.E_global_step.eval())
+                # add summary every 10 step
+                if np.mod(ind_batch, 10) == 0:
+                    self.writer.add_summary(train_summary, self.E_global_step.eval())
+                    projector_saver.save(self.session, os.path.join(self.save_dir,'projector','embedding.ckpt'),
+                                         self.E_global_step.eval())
             # save sample images for each epoch
             name = '{:02d}'.format(epoch+1)
             self.sample(sample_sketch_images, sample_photo_images, sample_label_age, sample_label_gender, name)
             self.test(sample_sketch_images, sample_photo_images, sample_label_gender, name)
 
-            # save checkpoint for every epoch
-            #if np.mod(epoch, 5) == 4:
-            self.save_checkpoint()
+            # save checkpoint for 5 epoch
+            if np.mod(epoch, 3) == 0:
+                self.save_checkpoint()
 
         # save the trained model
         self.save_checkpoint()
